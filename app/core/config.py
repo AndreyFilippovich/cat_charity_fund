@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     app_description: str = 'Описание проекта'
     database_url: str = 'sqlite+aiosqlite:///./qrkot.db'
     secret: str = 'SECRET'
-    first_superuser_email: Optional[EmailStr] = 'andrejfilippovic8@gmail.com'
-    first_superuser_password: Optional[str] = 31523956
+    first_superuser_email: Optional[EmailStr] = 'admin@admin.com'
+    first_superuser_password: Optional[str] = 123456
 
     class Config:
         env_file = '.env'
