@@ -10,29 +10,23 @@ router = APIRouter()
 router.include_router(
     fastapi_users.get_auth_router(auth_backend),
     prefix='/auth/jwt',
-    tags=['auth']
+    tags=['Auth'],
 )
 
 router.include_router(
     fastapi_users.get_register_router(UserRead, UserCreate),
     prefix='/auth',
-    tags=['auth']
+    tags=['Auth'],
 )
 
 router.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix='/users',
-    tags=['users']
+    tags=['Users'],
 )
 
 
-@router.delete(
-    '/users/{id}',
-    tags=['users'],
-    deprecated=True
-)
-def delete_user(id: str):
-    raise HTTPException(
-        status_code=422,
-        detail=USER_DELETION_ERROR
-    )
+@router.delete('/users/{id}', tags=['Users'], deprecated=True)
+def delete_user(user_id: str) -> HTTPException:
+    """Не используйте удаление, деактивируйте пользователей."""
+    raise HTTPException(status_code=405, detail=USER_DELETION_ERROR)

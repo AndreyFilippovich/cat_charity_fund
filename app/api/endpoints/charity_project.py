@@ -3,120 +3,107 @@ from typing import List
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.validators import (check_charity_project_exists,
-                                check_correct_full_amount_for_update,
-                                check_name_duplicate, check_project_was_closed,
-                                check_project_was_invested)
+from app.api.validators import (
+    check_before_delete,
+    check_before_update,
+    check_name_duplicate,
+)
 from app.core.db import get_async_session
 from app.core.user import current_superuser
-from app.crud.charity_project import charityproject_crud
-from app.schemas.charity_project import (CharityProjectCreate,
-                                         CharityProjectDB,
-                                         CharityProjectUpdate)
-from app.services.investment import execute_investment_process
+from app.crud.charity_project import charity_project_crud
+from app.crud.donation import donation_crud
+from app.schemas.charity_project import (
+    CharityProjectCreate,
+    CharityProjectDB,
+    CharityProjectUpdate,
+)
+from app.services.investment import allocate_donation_funds
+
+ALL_PROJECTS_SUMMARY = "Список всех проектов"
+CREATE_PROJECT_SUMMARY = "Создать проект"
+DELETE_PROJECT_SUMMARY = "Удалить проект"
+UPDATE_PROJECT_SUMMARY = "Редактировать проект"
 
 router = APIRouter()
 
 
 @router.get(
-    '/',
+    "/",
     response_model=List[CharityProjectDB],
-    response_model_exclude_none=True
+    response_model_exclude_none=True,
+    summary=ALL_PROJECTS_SUMMARY,
 )
 async def get_all_charity_projects(
-    session: AsyncSession = Depends(get_async_session)
-):
-    """Get all the charity projects.
-        Endpoint is available for all users.
-    """
-    charity_projects = await charityproject_crud.get_multiple(session)
-    return charity_projects
+    session: AsyncSession = Depends(get_async_session),
+) -> List[CharityProjectDB]:
+    """Просмотр списка всех благотворительных проектов."""
+    return await charity_project_crud.get_all(session=session)
 
 
 @router.post(
-    '/',
+    "/",
     response_model=CharityProjectDB,
-    dependencies=[Depends(current_superuser)],
     response_model_exclude_none=True,
+    dependencies=[Depends(current_superuser)],
+    summary=CREATE_PROJECT_SUMMARY,
 )
-async def create_new_charity_project(
+async def create_charity_project(
     charity_project: CharityProjectCreate,
     session: AsyncSession = Depends(get_async_session),
-):
-    """Create new Charity Project.
-        Endpoint is available only for superusers.
-    """
+) -> CharityProjectDB:
+    """Создает благотворительный проект. Только для суперюзеров."""
     await check_name_duplicate(
-        charity_project.name, session
+        charity_project_name=charity_project.name, session=session
     )
-    new_charity_project = await charityproject_crud.create(
-        charity_project, session
+    new_charity_project = await charity_project_crud.create(
+        obj_in=charity_project, session=session, commit=False
     )
-    await execute_investment_process(
-        new_charity_project, session
+    session.add_all(
+        allocate_donation_funds(
+            target=new_charity_project,
+            sources=await donation_crud.get_not_closed(session=session),
+        )
     )
+    await session.commit()
     await session.refresh(new_charity_project)
     return new_charity_project
 
 
-@router.patch(
-    '/{project_id}',
-    response_model=CharityProjectDB,
-    dependencies=[Depends(current_superuser)]
-)
-async def partially_update_charity_project(
-    project_id: int,
-    object_in: CharityProjectUpdate,
-    session: AsyncSession = Depends(get_async_session),
-):
-    """Partial update of Charity Project.
-        Endpoint is available only for superuser.
-        Fields to update:
-            - name (should be unique);
-            - description;
-            - full_amount (could not be less than the invested amount).
-    """
-    charity_project = await check_charity_project_exists(
-        project_id, session
-    )
-    await check_project_was_closed(project_id, session)
-
-    if object_in.full_amount is not None:
-        await check_correct_full_amount_for_update(
-            project_id, session, object_in.full_amount
-        )
-
-    if object_in.name is not None:
-        await check_name_duplicate(
-            object_in.name, session
-        )
-
-    charity_project = await charityproject_crud.update(
-        charity_project, object_in, session
-    )
-    return charity_project
-
-
 @router.delete(
-    '/{project_id}',
+    "/{project_id}",
     response_model=CharityProjectDB,
-    dependencies=[Depends(current_superuser)]
+    dependencies=[Depends(current_superuser)],
+    summary=DELETE_PROJECT_SUMMARY,
 )
 async def delete_charity_project(
+    project_id: int, session: AsyncSession = Depends(get_async_session)
+) -> CharityProjectDB:
+    """Удаляет благотворительный проект. Только для суперюзеров."""
+    charity_project = await check_before_delete(
+        charity_project_id=project_id, session=session
+    )
+    return await charity_project_crud.remove(
+        db_obj=charity_project, session=session
+    )
+
+
+@router.patch(
+    "/{project_id}",
+    response_model=CharityProjectDB,
+    dependencies=[Depends(current_superuser)],
+    summary=UPDATE_PROJECT_SUMMARY,
+)
+async def update_charity_project(
     project_id: int,
+    charity_project_in: CharityProjectUpdate,
     session: AsyncSession = Depends(get_async_session),
-):
-    """Deletion of Charity Project.
-        The invested project could only be closed but not deleted.
-        Not invested projects could be deleted.
-    """
-    charity_project = await check_charity_project_exists(
-        project_id, session
+) -> CharityProjectDB:
+    """Редактирует благотворительный проект. Только для суперюзеров."""
+    charity_project_db = await check_before_update(
+        charity_project_id=project_id,
+        session=session,
+        charity_project_in=charity_project_in,
     )
-    await check_project_was_invested(project_id, session)
-    charity_project = await (
-        charityproject_crud.remove(
-            charity_project, session
-        )
+    return await charity_project_crud.update(
+        db_obj=charity_project_db, session=session, obj_in=charity_project_in
     )
-    return charity_project

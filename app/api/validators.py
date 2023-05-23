@@ -1,99 +1,81 @@
-from http import HTTPStatus
-
 from fastapi import HTTPException
-from pydantic import PositiveInt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crud.charity_project import charityproject_crud
-from app.models import CharityProject
+from app.crud.charity_project import charity_project_crud
+from app.models.charity_project import CharityProject
+from app.schemas.charity_project import CharityProjectUpdate
 
-PROJECT_NOT_FOUND_ERROR = 'Данный проект не найден!'
-PROJECT_EXISTS_ERROR = 'Проект с таким именем уже существует!'
-FORBIDDEN_UPDATE_ERROR = 'Закрытый проект нельзя редактировать!'
-INVESTED_RPOJECT_DELETION_ERROR = (
+PROJECT_NOT_FOUND = (
+    'Проекта с указанным id <{charity_project_id}> не существует!'
+)
+PROJECT_NAME_DUPLICATED = 'Проект с таким именем уже существует!'
+ALREADY_INVESTED_ERROR = (
     'В проект были внесены средства, не подлежит удалению!'
 )
-INVALID_INVESTED_AMOUNT_ERROR = (
-    'Новая требуемая сумма должна быть больше уже '
-    'внесенной в проект суммы - {project_invested_amount}'
-)
+CLOSED_PROJECT_ERROR = 'Закрытый проект нельзя редактировать!'
 
 
-async def check_charity_project_exists(
-    project_id: int,
-    session: AsyncSession,
+async def check_exists(
+    charity_project_id: int, session: AsyncSession
 ) -> CharityProject:
-    charity_project = await charityproject_crud.get_charity_project(
-        object_id=project_id, session=session
+    """Проверка наличия проекта в базе."""
+    charity_project = await charity_project_crud.get(
+        obj_id=charity_project_id, session=session
     )
-    if not charity_project:
+    if charity_project is None:
         raise HTTPException(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail=PROJECT_NOT_FOUND_ERROR
+            status_code=404,
+            detail=PROJECT_NOT_FOUND.format(
+                charity_project_id=charity_project_id
+            ),
         )
     return charity_project
 
 
 async def check_name_duplicate(
-    project_name: str,
-    session: AsyncSession
+    charity_project_name: str, session: AsyncSession
 ) -> None:
-    charity_project_id = await (
-        charityproject_crud.get_charity_project_id_by_name(
-            project_name=project_name, session=session
-        )
+    """Проверка имени проекта на уникальность."""
+    charity_project = await charity_project_crud.get_charity_project_by_name(
+        charity_project_name=charity_project_name, session=session
     )
-    if charity_project_id is not None:
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=PROJECT_EXISTS_ERROR
-        )
+    if charity_project is not None:
+        raise HTTPException(status_code=400, detail=PROJECT_NAME_DUPLICATED)
 
 
-async def check_project_was_closed(
-    project_id: int,
-    session: AsyncSession
-):
-    project_close_date = await (
-        charityproject_crud.get_charity_project_close_date(
-            project_id, session
-        )
+async def check_before_delete(
+    charity_project_id: int, session: AsyncSession
+) -> CharityProject:
+    """Проверка перед удалением на наличие вложенных средств."""
+    charity_project = await check_exists(
+        charity_project_id=charity_project_id, session=session
     )
-    if project_close_date:
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=FORBIDDEN_UPDATE_ERROR
-        )
+    if charity_project.invested_amount > 0:
+        raise HTTPException(status_code=400, detail=ALREADY_INVESTED_ERROR)
+    return charity_project
 
 
-async def check_project_was_invested(
-    project_id: int,
-    session: AsyncSession
-):
-    invested_project = await (
-        charityproject_crud.get_charity_project_invested_amount(
-            project_id, session
-        )
-    )
-    if invested_project:
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=INVESTED_RPOJECT_DELETION_ERROR
-        )
-
-
-async def check_correct_full_amount_for_update(
-    project_id: int,
+async def check_before_update(
+    charity_project_id: int,
+    charity_project_in: CharityProjectUpdate,
     session: AsyncSession,
-    full_amount_to_update: PositiveInt
-):
-    db_project_invested_amount = await (
-        charityproject_crud.get_charity_project_invested_amount(
-            project_id, session
-        )
+) -> CharityProject:
+    """Проверка перед обновлением на наличие вложенных средств и закрытый"""
+    charity_project = await check_exists(
+        charity_project_id=charity_project_id, session=session
     )
-    if db_project_invested_amount > full_amount_to_update:
+    if charity_project.close_date is not None:
+        raise HTTPException(status_code=400, detail=CLOSED_PROJECT_ERROR)
+    full_amount_update_value = charity_project_in.full_amount
+    if (
+        full_amount_update_value and
+        charity_project.invested_amount > full_amount_update_value
+    ):
         raise HTTPException(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail=INVALID_INVESTED_AMOUNT_ERROR.format(db_project_invested_amount)
+            status_code=422,
+            detail='нельзя установить требуемую сумму меньше уже вложенной.',
         )
+    await check_name_duplicate(
+        charity_project_name=charity_project_in.name, session=session
+    )
+    return charity_project
