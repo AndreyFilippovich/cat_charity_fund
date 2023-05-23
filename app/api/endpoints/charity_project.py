@@ -3,44 +3,60 @@ from typing import List
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.validators import (check_name_duplicate, check_project_edit,
-                                check_project_exists)
+from app.api.validators import (check_charity_project_exists,
+                                check_correct_full_amount_for_update,
+                                check_name_duplicate, check_project_was_closed,
+                                check_project_was_invested)
 from app.core.db import get_async_session
 from app.core.user import current_superuser
-from app.crud.charity_project import charity_project_crud
+from app.crud.charity_project import charityproject_crud
 from app.schemas.charity_project import (CharityProjectCreate,
                                          CharityProjectDB,
                                          CharityProjectUpdate)
-from app.services.investment import investing_in_project
+from app.services.investment import execute_investment_process
 
 router = APIRouter()
-
-
-@router.post(
-    '/',
-    response_model=CharityProjectDB,
-    response_model_exclude_none=True,
-    dependencies=[Depends(current_superuser)]
-)
-async def create_new_charity_project(
-        charity_project: CharityProjectCreate,
-        session: AsyncSession = Depends(get_async_session),
-):
-    await check_name_duplicate(charity_project.name, session)
-    new_project = await charity_project_crud.create(charity_project, session)
-    await investing_in_project(new_project, session)
-    return new_project
 
 
 @router.get(
     '/',
     response_model=List[CharityProjectDB],
+    response_model_exclude_none=True
+)
+async def get_all_charity_projects(
+    session: AsyncSession = Depends(get_async_session)
+):
+    """Get all the charity projects.
+        Endpoint is available for all users.
+    """
+    charity_projects = await charityproject_crud.get_multiple(session)
+    return charity_projects
+
+
+@router.post(
+    '/',
+    response_model=CharityProjectDB,
+    dependencies=[Depends(current_superuser)],
     response_model_exclude_none=True,
 )
-async def get_all_projects(
-        session: AsyncSession = Depends(get_async_session),
+async def create_new_charity_project(
+    charity_project: CharityProjectCreate,
+    session: AsyncSession = Depends(get_async_session),
 ):
-    return await charity_project_crud.get_multi(session)
+    """Create new Charity Project.
+        Endpoint is available only for superusers.
+    """
+    await check_name_duplicate(
+        charity_project.name, session
+    )
+    new_charity_project = await charityproject_crud.create(
+        charity_project, session
+    )
+    await execute_investment_process(
+        new_charity_project, session
+    )
+    await session.refresh(new_charity_project)
+    return new_charity_project
 
 
 @router.patch(
@@ -48,16 +64,37 @@ async def get_all_projects(
     response_model=CharityProjectDB,
     dependencies=[Depends(current_superuser)]
 )
-async def partially_update_project(
-        project_id: int,
-        obj_in: CharityProjectUpdate,
-        session: AsyncSession = Depends(get_async_session),
+async def partially_update_charity_project(
+    project_id: int,
+    object_in: CharityProjectUpdate,
+    session: AsyncSession = Depends(get_async_session),
 ):
-    project = await check_project_edit(
-        project_id, obj_in, session
+    """Partial update of Charity Project.
+        Endpoint is available only for superuser.
+        Fields to update:
+            - name (should be unique);
+            - description;
+            - full_amount (could not be less than the invested amount).
+    """
+    charity_project = await check_charity_project_exists(
+        project_id, session
     )
-    project = await charity_project_crud.update(project, obj_in, session)
-    return project
+    await check_project_was_closed(project_id, session)
+
+    if object_in.full_amount is not None:
+        await check_correct_full_amount_for_update(
+            project_id, session, object_in.full_amount
+        )
+
+    if object_in.name is not None:
+        await check_name_duplicate(
+            object_in.name, session
+        )
+
+    charity_project = await charityproject_crud.update(
+        charity_project, object_in, session
+    )
+    return charity_project
 
 
 @router.delete(
@@ -65,12 +102,21 @@ async def partially_update_project(
     response_model=CharityProjectDB,
     dependencies=[Depends(current_superuser)]
 )
-async def remove_meeting_room(
-        project_id: int,
-        session: AsyncSession = Depends(get_async_session),
+async def delete_charity_project(
+    project_id: int,
+    session: AsyncSession = Depends(get_async_session),
 ):
-    project = await check_project_exists(
+    """Deletion of Charity Project.
+        The invested project could only be closed but not deleted.
+        Not invested projects could be deleted.
+    """
+    charity_project = await check_charity_project_exists(
         project_id, session
     )
-    project = await charity_project_crud.remove(project, session)
-    return project
+    await check_project_was_invested(project_id, session)
+    charity_project = await (
+        charityproject_crud.remove(
+            charity_project, session
+        )
+    )
+    return charity_project

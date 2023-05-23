@@ -1,55 +1,61 @@
 from datetime import datetime
+from typing import List, Union
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.expression import false
 
 from app.models import CharityProject, Donation
 
 
-async def investment_process(model, objects_not_invest):
-    balance = model.full_amount
-    for i in objects_not_invest:
-        need_invest = i.full_amount - i.invested_amount
-        investing = min(balance, need_invest)
-        i.invested_amount += investing
-        model.invested_amount += investing
-        balance -= investing
-        if i.full_amount == i.invested_amount:
-            i.fully_invested = True
-            i.close_date = datetime.now()
-        if balance == 0:
-            model.fully_invested = True
-            model.close_date = datetime.now()
-            break
-
-
-async def investing_in_project(
-    model: CharityProject,
+async def get_not_invested_objects(
+    model_in: Union[CharityProject, Donation],
     session: AsyncSession
-):
-    donations_not_invest = await session.execute(
-        select(Donation).where(
-            Donation.fully_invested == False # noqa
+) -> List[Union[CharityProject, Donation]]:
+    db_objects = await session.execute(
+        select(
+            model_in
+        ).where(
+            model_in.fully_invested == false()
+        ).order_by(
+            model_in.create_date
         )
     )
-    donations_not_invest = donations_not_invest.scalars().all()
-    await investment_process(model, donations_not_invest)
-    await session.commit()
-    await session.refresh(model)
-    return model
+    return db_objects.scalars().all()
 
 
-async def investing_from_donation(
-    model: Donation,
+async def close_invested_object(
+    obj_to_close: Union[CharityProject, Donation],
+) -> None:
+    obj_to_close.fully_invested = True
+    obj_to_close.close_date = datetime.now()
+
+
+async def execute_investment_process(
+    object_in: Union[CharityProject, Donation],
     session: AsyncSession
 ):
-    projects_not_invest = await session.execute(
-        select(CharityProject).where(
-            CharityProject.fully_invested == False # noqa
-        )
+    db_model = (
+        CharityProject if isinstance(object_in, Donation) else Donation
     )
-    projects_not_invest = projects_not_invest.scalars().all()
-    await investment_process(model, projects_not_invest)
-    await session.commit()
-    await session.refresh(model)
-    return model
+    not_invested_objects = await get_not_invested_objects(db_model, session)
+    available_amount = object_in.full_amount
+
+    if not_invested_objects:
+        for not_invested_obj in not_invested_objects:
+            need_to_invest = not_invested_obj.full_amount - not_invested_obj.invested_amount
+            to_invest = (
+                need_to_invest if need_to_invest < available_amount else available_amount
+            )
+            not_invested_obj.invested_amount += to_invest
+            object_in.invested_amount += to_invest
+            available_amount -= to_invest
+
+            if not_invested_obj.full_amount == not_invested_obj.invested_amount:
+                await close_invested_object(not_invested_obj)
+
+            if not available_amount:
+                await close_invested_object(object_in)
+                break
+        await session.commit()
+    return object_in

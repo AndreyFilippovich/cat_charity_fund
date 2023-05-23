@@ -5,22 +5,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud.base import CRUDBase
 from app.models import Donation, User
+from app.schemas.donation import DonationCreate
 
 
-class CRUDDonation(CRUDBase):
+class CRUDDonation(
+    CRUDBase[
+        Donation,
+        DonationCreate,
+        None
+    ]
+):
 
-    async def get_donation_by_user(
+    async def get_donations_by_user(
             self,
-            user: User,
             session: AsyncSession,
+            user: User
     ) -> List[Donation]:
-        db_donation = await session.execute(
+        donations = await session.execute(
             select(Donation).where(
                 Donation.user_id == user.id
             )
         )
-        db_donation = db_donation.scalars().all()
-        return db_donation
+        return donations.scalars().all()
 
 
 donation_crud = CRUDDonation(Donation)
