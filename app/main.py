@@ -13,6 +13,3 @@ app.include_router(main_router)
 async def startup():
     '''При старте приложения запускаеn корутину create_first_superuser'''
     await create_first_superuser()
-
-
-# это строчка для того, чтобы были изменения и я мог запушить ещё раз 
