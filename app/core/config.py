@@ -10,8 +10,8 @@ class Settings(BaseSettings):
         'QRKot - Благотворительный фонд поддержки бездомных котиков'
     )
     app_description: str = 'Благотворительный фонд поддержки бездомных котиков'
-    database_url: str = 'sqlite+aiosqlite:///./fastapi.db'
-    secret: str = 'secret'
+    database_url: str = 'sqlite+aiosqlite:///./cat_charity.db'
+    secret: str = 'shd'
     first_superuser_email: Optional[EmailStr] = None
     first_superuser_password: Optional[str] = None
 
